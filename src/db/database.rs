@@ -1,5 +1,5 @@
 // ================================================================
-// Omega Database
+// Database
 //
 // © 2026 WhaleHook. All rights reserved.
 //
