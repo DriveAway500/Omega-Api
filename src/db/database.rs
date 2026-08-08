@@ -1,3 +1,15 @@
+// ================================================================
+// Omega Crawler Database
+//
+// © 2026 WhaleHook. All rights reserved.
+//
+// Minimal SQLite database used exclusively for testing the
+// crawler's data flow.
+//
+// The current schema stores crawler topics only and is not
+// intended to represent the final database architecture.
+// ================================================================
+
 use sqlx::{SqlitePool, Error};
 
 pub struct Database {
