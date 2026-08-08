@@ -1,5 +1,5 @@
 // ================================================================
-// Omega Crawler API
+// Omega API
 //
 // © 2026 WhaleHook. All rights reserved.
 //
