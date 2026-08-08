@@ -1,5 +1,5 @@
 // ================================================================
-// Omega Crawler API Routes
+// Omega API Routes
 //
 // © 2026 WhaleHook. All rights reserved.
 //

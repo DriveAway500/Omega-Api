@@ -1,5 +1,5 @@
 // ================================================================
-// Omega Crawler Database
+// Omega Database
 //
 // © 2026 WhaleHook. All rights reserved.
 //
