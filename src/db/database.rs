@@ -22,6 +22,11 @@ impl Database {
         sqlx::query("CREATE TABLE IF NOT EXISTS topics (id INTEGER PRIMARY KEY, name TEXT)")
             .execute(&pool)
             .await?;
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS last_modified (url TEXT PRIMARY KEY, last_modified TEXT)")
+            .execute(&pool)
+            .await?;
+
         Ok(Self { pool })
     }
 
@@ -37,5 +42,23 @@ impl Database {
         sqlx::query_as("SELECT id, name FROM topics")
             .fetch_all(&self.pool)
             .await
+    }
+    
+    pub async fn get_last_modified(&self, url: &str) -> Result<Option<String>, Error> {
+        let result = sqlx::query_as::<_, (String,)>("SELECT last_modified FROM last_modified WHERE url = ?")
+            .bind(url)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(result.map(|(last_modified,)| last_modified))
+    }
+
+    pub async fn set_last_modified(&self, url: &str, last_modified: &str) -> Result<(), Error> {
+        sqlx::query("INSERT INTO last_modified (url, last_modified) VALUES (?, ?) ON CONFLICT(url) DO UPDATE SET last_modified = excluded.last_modified")
+            .bind(url)
+            .bind(last_modified)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
