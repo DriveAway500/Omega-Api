@@ -1,0 +1,10 @@
+{
+  "routes": [
+    {
+      "name": "minha_rota",
+      "method": "GET",
+      "path": "/users",
+      "response_type": "json"
+    }
+  ]
+}
