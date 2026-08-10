@@ -1,10 +1,7 @@
-from renderer import renderer, render_rsfile
+from renderer import renderer
 
 def main():
-    routes = renderer()
-    print(routes)
-    content = "// Generated Rust code for routes\n"
-    render_rsfile(content)
+    renderer()
 
 if __name__ == "__main__":
     main()

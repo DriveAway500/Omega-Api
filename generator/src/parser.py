@@ -46,6 +46,7 @@ class Route:
     name: str
     method: str
     path: str
+    db_method: str
     response_type: str
 
 
@@ -60,6 +61,7 @@ def parse_routes(data):
                 name=route_data["name"],
                 method=route_data["method"],
                 path=route_data["path"],
+                db_method=route_data["db_method"],
                 response_type=route_data["response_type"],
             )
             routes.append(route)

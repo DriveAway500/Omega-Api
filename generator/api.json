@@ -1,9 +1,10 @@
 {
   "routes": [
     {
-      "name": "minha_rota",
-      "method": "GET",
+      "name": "users",
+      "method": "POST",
       "path": "/users",
+      "db_method":"GET_TOPICS",
       "response_type": "json"
     }
   ]
