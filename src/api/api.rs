@@ -16,9 +16,14 @@ use crate::Database;
 
 pub fn routes(db: Arc<Database>) -> Router {
     Router::new()
+        .route("/health", get(health_check))
         .route("/topics", get(get_topics).post(add_topic))
         .route("/last_modified/{*url}", get(get_last_modified).post(set_last_modified))
         .with_state(db)
+}
+
+async fn health_check() -> StatusCode{
+    StatusCode::OK
 }
 
 async fn add_topic(State(db): State<Arc<Database>>, body: String) -> Json<i64> {
