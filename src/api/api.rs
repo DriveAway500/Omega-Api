@@ -11,7 +11,7 @@
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     routing::{get, post},
     Json, Router,
 };
@@ -28,6 +28,7 @@ pub fn routes(db: Arc<Database>) -> Router {
         .route("/last_modified/{*url}", get(get_last_modified).post(set_last_modified))
         .route("/recent_cve", post(post_recent_cve))
         .route("/recent_cve_feed", get(get_recent_cve))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(db)
 }
 
@@ -65,10 +66,16 @@ async fn set_last_modified(
     StatusCode::NO_CONTENT
 }
 
-async fn post_recent_cve(State(db): State<Arc<Database>>, body: Bytes) 
--> Result<StatusCode, StatusCode> {
+async fn post_recent_cve(
+    State(db): State<Arc<Database>>,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+
     let feed: Value = serde_json::from_slice(&body)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|err| {
+            println!("err: {:?}", err);
+            StatusCode::BAD_REQUEST
+        })?;
 
     let vulnerabilities = feed
         .get("vulnerabilities")
@@ -76,6 +83,7 @@ async fn post_recent_cve(State(db): State<Arc<Database>>, body: Bytes)
         .ok_or(StatusCode::BAD_REQUEST)?;
 
     for vulnerability in vulnerabilities {
+
         let cve = vulnerability
             .get("cve")
             .ok_or(StatusCode::BAD_REQUEST)?;
@@ -90,8 +98,13 @@ async fn post_recent_cve(State(db): State<Arc<Database>>, body: Bytes)
             .and_then(Value::as_str)
             .ok_or(StatusCode::BAD_REQUEST)?;
 
+        println!("last_modified: {:?}", last_modified);
+
         let data = serde_json::to_string(cve)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|err| {
+                println!("err: {:?}", err);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         db.post_recent_cve(
             cve_id,
@@ -99,18 +112,25 @@ async fn post_recent_cve(State(db): State<Arc<Database>>, body: Bytes)
             &data,
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| {
+            println!("err: {:?}", err);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     }
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn get_recent_cve(State(db): State<Arc<Database>>,) 
--> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+async fn get_recent_cve(
+    State(db): State<Arc<Database>>,
+) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
     let cves = db
         .get_recent_cve()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| {
+            println!("err: {:?}", err);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(cves))
 }
