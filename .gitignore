@@ -2,3 +2,4 @@
 *.db
 /generator/src/__pycache__
 /generated
+*.pyc
