@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import json
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
     get_cve_by_id,
@@ -18,6 +19,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"], 
+    allow_headers=["*"], 
+)
 
 
 @app.post("/cve")
@@ -41,9 +50,11 @@ async def create_recent_cve(request: Request):
 
         elif "CVE_Items" in payload:
             for item in payload["CVE_Items"]:
-                cve_id = item.get("cve", {}) \
-                             .get("CVE_data_meta", {}) \
-                             .get("ID")
+                cve_id = (
+                    item.get("cve", {})
+                    .get("CVE_data_meta", {})
+                    .get("ID")
+                )
                 last_modified = item.get("lastModifiedDate", "")
 
                 if cve_id:
@@ -79,9 +90,7 @@ async def list_recent_cves(limit: int = 100):
 async def search_cve(cve_id: str):
     cve = await get_cve_by_id(cve_id)
     if not cve:
-        raise HTTPException(
-            status_code=404, detail="Not found."
-        )
+        raise HTTPException(status_code=404, detail="Not found.")
     return cve
 
 
