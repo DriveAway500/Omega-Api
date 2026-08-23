@@ -6,3 +6,9 @@
 *.db-wal
 *.db-shm
 src/database.db-wal
+src/exploitdb/
+src/exploitdb-main/
+src/exploitdb_temp.zip
+exploitdb/
+exploitdb-main/
+exploitdb_temp.zip

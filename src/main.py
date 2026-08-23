@@ -4,6 +4,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from exploitdb import exploit_db
+
 from database import (
     add_tag_sha256,
     close_db,
@@ -19,6 +21,7 @@ from database import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await exploit_db.initialize()
     yield
     await close_db()
 
@@ -96,6 +99,7 @@ async def fetch_by_tag(tag: str):
 async def health_check():
     return {"status": "healthy"}
 
+
 @app.get("/cve/search/package")
 async def search_cves_by_package(package_name: str = Query(..., min_length=1)):
     cves = await get_cves_by_package_name(package_name)
@@ -105,6 +109,20 @@ async def search_cves_by_package(package_name: str = Query(..., min_length=1)):
             detail=f"No CVEs found affecting package '{package_name}'.",
         )
     return cves
+
+
+@app.get("/exploit/search")
+async def search_exploits(q: str = Query(..., min_length=1), limit: int = 50):
+    results = await exploit_db.search_by_term(q, limit=limit)
+    return results
+
+
+@app.get("/exploit/{exploit_id}")
+async def get_exploit_by_id(exploit_id: str):
+    data, error = await exploit_db.get_exploit_by_id(exploit_id)
+    if error:
+        raise HTTPException(status_code=404, detail=error)
+    return data
 
 
 if __name__ == "__main__":
