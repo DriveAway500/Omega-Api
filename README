@@ -1,4 +1,4 @@
-clone o repositorio de db com:
+clone o repositorio de exploits com:
 git clone --depth 1 https://gitlab.com/exploit-database/exploitdb.git
 
 atualize com: git pull
