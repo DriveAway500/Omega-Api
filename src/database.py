@@ -131,3 +131,33 @@ async def get_recent_cve(limit=100):
         rows = await cursor.fetchall()
         return [json.loads(row[0]) for row in rows]
 
+async def get_cves_by_package_name(package_name):
+    db = await get_db()
+    
+    term = f"%{package_name.lower()}%"
+    
+    query = """
+        SELECT DISTINCT c.cve_id, c.last_modified, c.data
+        FROM recent_cve c
+        WHERE LOWER(c.data) LIKE ?
+           OR EXISTS (
+               SELECT 1 
+               FROM json_each(c.data, '$.affected') AS aff,
+                    json_each(aff.value, '$.affectedData') AS aff_data
+               WHERE LOWER(json_extract(aff_data.value, '$.packageName')) LIKE ?
+                  OR LOWER(json_extract(aff_data.value, '$.product')) LIKE ?
+                  OR LOWER(json_extract(aff_data.value, '$.vendor')) LIKE ?
+           )
+    """
+    
+    async with db.execute(query, (term, term, term, term)) as cursor:
+        rows = await cursor.fetchall()
+        return [
+            {
+                "cve_id": row[0],
+                "last_modified": row[1],
+                "data": json.loads(row[2])
+            }
+            for row in rows
+        ]
+

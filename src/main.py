@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import json
 import uvicorn
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
@@ -12,6 +12,7 @@ from database import (
     get_recent_cve,
     init_db,
     post_many_cves,
+    get_cves_by_package_name,
 )
 
 
@@ -94,6 +95,16 @@ async def fetch_by_tag(tag: str):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.get("/cve/search/package")
+async def search_cves_by_package(package_name: str = Query(..., min_length=1)):
+    cves = await get_cves_by_package_name(package_name)
+    if not cves:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No CVEs found affecting package '{package_name}'.",
+        )
+    return cves
 
 
 if __name__ == "__main__":
