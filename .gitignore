@@ -3,3 +3,6 @@
 /generator/src/__pycache__
 /generated
 *.pyc
+*.db-wal
+*.db-shm
+src/database.db-wal

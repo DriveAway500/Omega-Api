@@ -1,21 +1,18 @@
 import json
-import re
 import aiosqlite
 
 DB_NAME = "database.db"
 
-db_conn: aiosqlite.Connection | None = None
+db_conn = None
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Retorna a conexão ativa do banco de dados."""
+async def get_db():
     if db_conn is None:
         raise RuntimeError("Banco de dados não foi inicializado.")
     return db_conn
 
 
 async def init_db():
-    """Inicializa a conexão e cria o schema do banco."""
     global db_conn
     db_conn = await aiosqlite.connect(DB_NAME)
     
@@ -32,17 +29,39 @@ async def init_db():
         """
     )
 
+    async with db_conn.execute("PRAGMA table_info(tags_sha256)") as cursor:
+        table_exists = bool(await cursor.fetchall())
+    if table_exists:
+        async with db_conn.execute("PRAGMA table_info(tags_sha256)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+    else:
+        columns = set()
+
+    if table_exists and "url" not in columns:
+        await db_conn.execute("ALTER TABLE tags_sha256 RENAME TO tags_sha256_old")
+
     await db_conn.execute(
         """
         CREATE TABLE IF NOT EXISTS tags_sha256 (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tag TEXT NOT NULL,
+            url TEXT NOT NULL,
             sha256 TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(tag, sha256)
+            UNIQUE(tag, url, sha256)
         )
         """
     )
+
+    if table_exists and "url" not in columns:
+        await db_conn.execute(
+            """
+            INSERT INTO tags_sha256 (id, tag, url, sha256, created_at)
+            SELECT id, tag, '', sha256, created_at
+            FROM tags_sha256_old
+            """
+        )
+        await db_conn.execute("DROP TABLE tags_sha256_old")
 
     await db_conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tags_sha256_tag ON tags_sha256(tag);"
@@ -58,36 +77,28 @@ async def close_db():
 
 
 
-async def add_tag_sha256(tag: str, sha256: str) -> bool:
-    """
-    Insere uma tag e seu SHA-256. 
-    Se a combinação já existir, ignora sem quebrar a execução.
-    """
+async def add_tag_sha256(tag, url, sha256):
     db = await get_db()
     cursor = await db.execute(
         """
-        INSERT INTO tags_sha256 (tag, sha256) 
-        VALUES (?, ?)
-        ON CONFLICT(tag, sha256) DO NOTHING
+        INSERT INTO tags_sha256 (tag, url, sha256)
+        VALUES (?, ?, ?)
+        ON CONFLICT(tag, url, sha256) DO NOTHING
         """,
-        (tag, sha256.lower()),
+        (tag, url, sha256.lower()),
     )
     await db.commit()
     return cursor.rowcount > 0
 
 
-async def get_all_by_tag(tag: str) -> list[tuple[str, str]]:
-    """Retorna todas as ocorrências (tag, sha256) filtradas pela tag."""
+async def get_all_by_tag(tag):
     db = await get_db()
     async with db.execute(
-        "SELECT tag, sha256 FROM tags_sha256 WHERE tag = ?", (tag,)
+        "SELECT url, sha256 FROM tags_sha256 WHERE tag = ? ORDER BY id", (tag,)
     ) as cursor:
         return await cursor.fetchall()
 
-
-# --- OPERAÇÕES DA TABELA CVE ---
-
-async def post_many_cves(cve_list: list[tuple[str, str, str]]):
+async def post_many_cves(cve_list):
     db = await get_db()
     await db.executemany(
         """
@@ -102,7 +113,7 @@ async def post_many_cves(cve_list: list[tuple[str, str, str]]):
     await db.commit()
 
 
-async def get_cve_by_id(cve_id: str) -> dict | None:
+async def get_cve_by_id(cve_id):
     db = await get_db()
     async with db.execute(
         "SELECT data FROM recent_cve WHERE cve_id = ?", (cve_id,)
@@ -111,7 +122,7 @@ async def get_cve_by_id(cve_id: str) -> dict | None:
         return json.loads(row[0]) if row else None
 
 
-async def get_recent_cve(limit: int = 100) -> list[dict]:
+async def get_recent_cve(limit=100):
     db = await get_db()
     async with db.execute(
         "SELECT data FROM recent_cve ORDER BY last_modified DESC LIMIT ?",

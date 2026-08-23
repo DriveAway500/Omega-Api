@@ -77,22 +77,18 @@ async def search_cve(cve_id: str):
     return cve
 
 
-@app.post("/last_modified", status_code=status.HTTP_201_CREATED)
-async def last_modified(sha256: str):
-    await add_tag_sha256("last_modified", sha256)
+@app.post("/post_nvd_tags", status_code=status.HTTP_201_CREATED)
+async def create_tags_sha256(payload: list[dict]):
+    for item in payload:
+        await add_tag_sha256(item["tag"], item["url"], item["sha256"])
+
     return {"status": "success"}
 
 
-@app.post("/tags/{tag}", status_code=status.HTTP_201_CREATED)
-async def create_tag_sha256(tag: str, sha256: str):
-    await add_tag_sha256(tag, sha256)
-    return {"status": "success"}
-
-
-@app.get("/tags/{tag}")
+@app.get("/get_nvd_tags/{tag}")
 async def fetch_by_tag(tag: str):
     results = await get_all_by_tag(tag)
-    return [{"tag": item[0], "sha256": item[1]} for item in results]
+    return [{"url": item[0], "sha256": item[1]} for item in results]
 
 
 @app.get("/health")
