@@ -8,13 +8,10 @@ from exploitdb import exploit_db
 from zerodaytodaydb import zeroday_mgr
 
 from database import (
-    add_tag_sha256,
     close_db,
-    get_all_by_tag,
     get_cve_by_id,
     get_recent_cve,
     init_db,
-    post_many_cves,
     get_cves_by_package_name,
 )
 
@@ -39,37 +36,6 @@ app.add_middleware(
 )
 
 
-@app.post("/cve", status_code=status.HTTP_201_CREATED)
-async def create_recent_cve(payload: dict):
-    cves_to_insert = []
-
-    if "vulnerabilities" in payload:
-        for item in payload["vulnerabilities"]:
-            cve_obj = item.get("cve", {})
-            cve_id = cve_obj.get("id")
-            if cve_id:
-                cves_to_insert.append(
-                    (cve_id, cve_obj.get("lastModified", ""), json.dumps(cve_obj))
-                )
-
-    elif "CVE_Items" in payload:
-        for item in payload["CVE_Items"]:
-            cve_id = item.get("cve", {}).get("CVE_data_meta", {}).get("ID")
-            if cve_id:
-                cves_to_insert.append(
-                    (cve_id, item.get("lastModifiedDate", ""), json.dumps(item))
-                )
-
-    if not cves_to_insert:
-        raise HTTPException(
-            status_code=400,
-            detail="No valid CVEs found in the submitted JSON.",
-        )
-
-    await post_many_cves(cves_to_insert)
-    return {"status": "success", "cves_processed": len(cves_to_insert)}
-
-
 @app.get("/cve")
 async def list_recent_cves(limit: int = 100):
     return await get_recent_cve(limit=limit)
@@ -81,20 +47,6 @@ async def search_cve(cve_id: str):
     if not cve:
         raise HTTPException(status_code=404, detail="Not found.")
     return cve
-
-
-@app.post("/post_nvd_tags", status_code=status.HTTP_201_CREATED)
-async def create_tags_sha256(payload: list[dict]):
-    for item in payload:
-        await add_tag_sha256(item["tag"], item["url"], item["sha256"])
-
-    return {"status": "success"}
-
-
-@app.get("/get_nvd_tags/{tag}")
-async def fetch_by_tag(tag: str):
-    results = await get_all_by_tag(tag)
-    return [{"url": item[0], "sha256": item[1]} for item in results]
 
 
 @app.get("/health")
