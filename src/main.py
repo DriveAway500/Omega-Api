@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from exploitdb import exploit_db
+from zerodaytodaydb import zeroday_mgr
 
 from database import (
     add_tag_sha256,
@@ -22,6 +23,7 @@ from database import (
 async def lifespan(app: FastAPI):
     await init_db()
     await exploit_db.initialize()
+    await zeroday_mgr.initialize()
     yield
     await close_db()
 
@@ -124,6 +126,17 @@ async def get_exploit_by_id(exploit_id: str):
         raise HTTPException(status_code=404, detail=error)
     return data
 
+@app.get("/zeroday/search")
+async def search_zeroday_exploits(q: str = Query(..., min_length=1), limit: int = 50):
+    results = await zeroday_mgr.search_by_term(q, limit=limit)
+    return results
+
+@app.get("/zeroday/{exploit_id}")
+async def get_zeroday_exploit_by_id(exploit_id: str):
+    data, error = await zeroday_mgr.get_exploit_by_id(exploit_id)
+    if error:
+        raise HTTPException(status_code=404, detail=error)
+    return data
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=3000, reload=True)
