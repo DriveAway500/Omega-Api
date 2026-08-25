@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
-import json
+from typing import Any
+
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from exploitdb import exploit_db
 from zerodaytodaydb import zeroday_mgr
@@ -15,6 +17,8 @@ from database import (
     get_cves_by_package_name,
 )
 
+JSON_MEDIA_TYPE = "application/json"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,6 +29,12 @@ async def lifespan(app: FastAPI):
     await close_db()
 
 
+# Rotas /cve* retornam Response já serializada (bytes crus vindos do banco,
+# ver raw=True em database.py) — o FastAPI pula toda serialização quando
+# detecta uma instância de Response, então não precisam de response_model.
+# Para /exploit e /zeroday, que devolvem dict/list normais, a anotação de
+# tipo de retorno abaixo ativa o serializador nativo do Pydantic (Rust),
+# que hoje é o caminho rápido recomendado no lugar de ORJSONResponse.
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -35,18 +45,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Comprime respostas acima de ~1KB (a listagem de CVEs facilmente passa disso).
+# O ganho aqui é de rede/latência percebida pelo cliente, não de CPU do servidor.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 
 @app.get("/cve")
-async def list_recent_cves(limit: int = 100):
-    return await get_recent_cve(limit=limit)
-
-
-@app.get("/cve/{cve_id}")
-async def search_cve(cve_id: str):
-    cve = await get_cve_by_id(cve_id)
-    if not cve:
-        raise HTTPException(status_code=404, detail="Not found.")
-    return cve
+async def list_recent_cves(limit: int = Query(100, ge=1, le=500)):
+    data = await get_recent_cve(limit=limit, raw=True)
+    return Response(content=data, media_type=JSON_MEDIA_TYPE)
 
 
 @app.get("/health")
@@ -55,40 +62,60 @@ async def health_check():
 
 
 @app.get("/cve/search/package")
-async def search_cves_by_package(package_name: str = Query(..., min_length=1)):
-    cves = await get_cves_by_package_name(package_name)
-    if not cves:
+async def search_cves_by_package(
+    package_name: str = Query(..., min_length=1),
+    limit: int = Query(100, ge=1, le=500),
+):
+    data = await get_cves_by_package_name(package_name, limit=limit, raw=True)
+    if data == b"[]":
         raise HTTPException(
             status_code=404,
             detail=f"No CVEs found affecting package '{package_name}'.",
         )
-    return cves
+    return Response(content=data, media_type=JSON_MEDIA_TYPE)
+
+@app.get("/cve/{cve_id}")
+async def search_cve(cve_id: str):
+    data = await get_cve_by_id(cve_id, raw=True)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Not found.")
+    return Response(content=data, media_type=JSON_MEDIA_TYPE)
 
 
 @app.get("/exploit/search")
-async def search_exploits(q: str = Query(..., min_length=1), limit: int = 50):
+async def search_exploits(
+    q: str = Query(..., min_length=1), limit: int = Query(50, ge=1, le=500)
+) -> list[dict[str, Any]]:
     results = await exploit_db.search_by_term(q, limit=limit)
     return results
 
 
 @app.get("/exploit/{exploit_id}")
-async def get_exploit_by_id(exploit_id: str):
+async def get_exploit_by_id(exploit_id: str) -> dict[str, Any]:
     data, error = await exploit_db.get_exploit_by_id(exploit_id)
     if error:
         raise HTTPException(status_code=404, detail=error)
     return data
 
+
 @app.get("/zeroday/search")
-async def search_zeroday_exploits(q: str = Query(..., min_length=1), limit: int = 50):
+async def search_zeroday_exploits(
+    q: str = Query(..., min_length=1), limit: int = Query(50, ge=1, le=500)
+) -> list[dict[str, Any]]:
     results = await zeroday_mgr.search_by_term(q, limit=limit)
     return results
 
+
 @app.get("/zeroday/{exploit_id}")
-async def get_zeroday_exploit_by_id(exploit_id: str):
+async def get_zeroday_exploit_by_id(exploit_id: str) -> dict[str, Any]:
     data, error = await zeroday_mgr.get_exploit_by_id(exploit_id)
     if error:
         raise HTTPException(status_code=404, detail=error)
     return data
 
+
 if __name__ == "__main__":
+    # Em produção: remova reload=True, ajuste host para "0.0.0.0" e considere
+    # workers>1 (uvicorn --workers N) já que cada worker abre seu próprio pool
+    # de conexões de leitura (init_db roda por processo).
     uvicorn.run("main:app", host="127.0.0.1", port=3000, reload=True)
