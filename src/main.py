@@ -28,13 +28,6 @@ async def lifespan(app: FastAPI):
     yield
     await close_db()
 
-
-# Rotas /cve* retornam Response já serializada (bytes crus vindos do banco,
-# ver raw=True em database.py) — o FastAPI pula toda serialização quando
-# detecta uma instância de Response, então não precisam de response_model.
-# Para /exploit e /zeroday, que devolvem dict/list normais, a anotação de
-# tipo de retorno abaixo ativa o serializador nativo do Pydantic (Rust),
-# que hoje é o caminho rápido recomendado no lugar de ORJSONResponse.
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -86,7 +79,7 @@ async def search_cve(cve_id: str):
 async def search_exploits(
     q: str = Query(..., min_length=1), limit: int = Query(50, ge=1, le=500)
 ) -> list[dict[str, Any]]:
-    results = await exploit_db.search_by_term(q, limit=limit)
+    results = await exploit_db.search(q, limit=limit)  # detecta CVE automaticamente
     return results
 
 
