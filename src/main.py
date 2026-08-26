@@ -44,8 +44,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.get("/cve")
-async def list_recent_cves(limit: int = Query(100, ge=1, le=500)):
-    data = await get_recent_cve(limit=limit, raw=True)
+async def list_recent_cves(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    data = await get_recent_cve(limit=limit, offset=offset, raw=True)
     return Response(content=data, media_type=JSON_MEDIA_TYPE)
 
 
@@ -58,8 +61,11 @@ async def health_check():
 async def search_cves_by_package(
     package_name: str = Query(..., min_length=1),
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    data = await get_cves_by_package_name(package_name, limit=limit, raw=True)
+    data = await get_cves_by_package_name(
+        package_name, limit=limit, offset=offset, raw=True
+    )
     if data == b"[]":
         raise HTTPException(
             status_code=404,
@@ -77,9 +83,11 @@ async def search_cve(cve_id: str):
 
 @app.get("/exploit/search")
 async def search_exploits(
-    q: str = Query(..., min_length=1), limit: int = Query(50, ge=1, le=500)
+    q: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
-    results = await exploit_db.search(q, limit=limit)  # detecta CVE automaticamente
+    results = await exploit_db.search(q, limit=limit, offset=offset)
     return results
 
 
@@ -93,9 +101,11 @@ async def get_exploit_by_id(exploit_id: str) -> dict[str, Any]:
 
 @app.get("/zeroday/search")
 async def search_zeroday_exploits(
-    q: str = Query(..., min_length=1), limit: int = Query(50, ge=1, le=500)
+    q: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
-    results = await zeroday_mgr.search_by_term(q, limit=limit)
+    results = await zeroday_mgr.search_by_term(q, limit=limit, offset=offset)
     return results
 
 

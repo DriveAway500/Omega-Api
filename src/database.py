@@ -170,12 +170,14 @@ async def get_cve_by_id(cve_id: str, raw: bool = False):
             return row[0] if raw else orjson.loads(row[0])
 
 
-async def get_recent_cve(limit: int = 100, raw: bool = False):
+async def get_recent_cve(limit: int = 100, offset: int = 0, raw: bool = False):
     limit = max(1, min(limit, 500))  # evita respostas gigantes por engano
+    offset = max(0, offset)
     async with read_conn() as db:
         async with db.execute(
-            "SELECT data FROM recent_cve ORDER BY last_modified DESC LIMIT ?",
-            (limit,),
+            "SELECT data FROM recent_cve "
+            "ORDER BY last_modified DESC, cve_id ASC LIMIT ? OFFSET ?",
+            (limit, offset),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -189,8 +191,11 @@ async def get_recent_cve(limit: int = 100, raw: bool = False):
     return [orjson.loads(row[0]) for row in rows]
 
 
-async def get_cves_by_package_name(package_name: str, limit: int = 100, raw: bool = False):
+async def get_cves_by_package_name(
+    package_name: str, limit: int = 100, offset: int = 0, raw: bool = False
+):
     limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     search_term = f'"{_escape_fts_phrase(package_name)}"*'
 
     query = """
@@ -198,12 +203,12 @@ async def get_cves_by_package_name(package_name: str, limit: int = 100, raw: boo
         FROM recent_cve_fts fts
         JOIN recent_cve c ON c.rowid = fts.rowid
         WHERE recent_cve_fts MATCH ?
-        ORDER BY c.last_modified DESC
-        LIMIT ?
+        ORDER BY c.last_modified DESC, c.cve_id ASC
+        LIMIT ? OFFSET ?
     """
 
     async with read_conn() as db:
-        async with db.execute(query, (search_term, limit)) as cursor:
+        async with db.execute(query, (search_term, limit, offset)) as cursor:
             rows = await cursor.fetchall()
 
     if raw:

@@ -34,9 +34,11 @@ class ZeroDayArchiveManager:
     async def initialize(self):
         await self.load_data_to_memory()
 
-    async def search_by_term(self, term, limit=50):
+    async def search_by_term(self, term, limit=50, offset=0):
         term_lower = term.lower()
         results = []
+        matched = 0
+        offset = max(0, offset)
 
         async with self.lock:
             data = self.cache
@@ -46,6 +48,9 @@ class ZeroDayArchiveManager:
             cves = " ".join(item.get("cve", [])).lower()
 
             if term_lower in title or term_lower in cves:
+                if matched < offset:
+                    matched += 1
+                    continue
                 results.append(item)
                 if len(results) >= limit:
                     break
