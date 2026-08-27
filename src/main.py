@@ -12,12 +12,14 @@ from zerodaytodaydb import zeroday_mgr
 from database import (
     close_db,
     get_cve_by_id,
-    get_recent_cve,
     init_db,
     get_cves_by_package_name,
 )
 
 JSON_MEDIA_TYPE = "application/json"
+# Mesmo padrão usado no build/database.py, só pra validar o formato do "year"
+# recebido na query string antes de bater no banco.
+YEAR_PATTERN = r"^\d{4}$|^misc$"
 
 
 @asynccontextmanager
@@ -43,15 +45,6 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-@app.get("/cve")
-async def list_recent_cves(
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-):
-    data = await get_recent_cve(limit=limit, offset=offset, raw=True)
-    return Response(content=data, media_type=JSON_MEDIA_TYPE)
-
-
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
@@ -60,16 +53,17 @@ async def health_check():
 @app.get("/cve/search/package")
 async def search_cves_by_package(
     package_name: str = Query(..., min_length=1),
+    year: str = Query(..., pattern=YEAR_PATTERN, description="Ano do CVE (ex.: 2023)."),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     data = await get_cves_by_package_name(
-        package_name, limit=limit, offset=offset, raw=True
+        package_name, year, limit=limit, offset=offset, raw=True
     )
     if data == b"[]":
         raise HTTPException(
             status_code=404,
-            detail=f"No CVEs found affecting package '{package_name}'.",
+            detail=f"No CVEs found affecting package '{package_name}' in {year}.",
         )
     return Response(content=data, media_type=JSON_MEDIA_TYPE)
 

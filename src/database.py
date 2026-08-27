@@ -1,15 +1,20 @@
 import asyncio
+import glob
+import os
+import re
 from contextlib import asynccontextmanager
 
 import aiosqlite
 import orjson
 
-DB_NAME = "database.db"
-POOL_SIZE = 4  # ajuste conforme núcleos disponíveis / carga esperada da API
+DB_DIR = "."
+DB_NAME_TEMPLATE = "cve_{year}.db"  # mesmo padrão usado no script de build
+POOL_SIZE = 4  # conexões de leitura por ano / ajuste conforme núcleos e carga
 
-_read_pool: "list[aiosqlite.Connection]" = []
-_read_queue = None  # asyncio.Queue criado em init_db (precisa de event loop ativo)
-_write_conn: aiosqlite.Connection | None = None
+# CVE-2023-12345 -> "2023"
+CVE_ID_RE = re.compile(r"^CVE-(\d{4})-\d+$", re.IGNORECASE)
+# cve_2023.db -> "2023" / cve_misc.db -> "misc"
+DB_YEAR_RE = re.compile(r"cve_(\w+)\.db$")
 
 READ_PRAGMAS = """
     PRAGMA journal_mode = WAL;
@@ -20,9 +25,27 @@ READ_PRAGMAS = """
     PRAGMA mmap_size = 268435456;  -- 256MB
 """
 
+# Um pool de leitura por ano: {"2023": {"queue": Queue, "conns": [...]}, ...}
+_pools: "dict[str, dict]" = {}
 
-async def _new_read_connection():
-    conn = await aiosqlite.connect(f"file:{DB_NAME}?mode=ro", uri=True)
+
+def db_path_for_year(year: str) -> str:
+    return os.path.join(DB_DIR, DB_NAME_TEMPLATE.format(year=year))
+
+
+def extract_cve_year(cve_id: str) -> str | None:
+    """Extrai o ano a partir do próprio ID (ex.: CVE-2023-12345 -> "2023")."""
+    m = CVE_ID_RE.match(cve_id.strip())
+    return m.group(1) if m else None
+
+
+def _extract_year_from_db_path(db_path: str) -> str | None:
+    m = DB_YEAR_RE.search(os.path.basename(db_path))
+    return m.group(1) if m else None
+
+
+async def _new_read_connection(db_path: str):
+    conn = await aiosqlite.connect(f"file:{db_path}?mode=ro", uri=True)
     await conn.executescript(READ_PRAGMAS)
     # Evita a decodificação UTF-8 automática do driver para colunas TEXT.
     # Campos pequenos (cve_id, last_modified) são decodificados manualmente
@@ -61,94 +84,66 @@ async def _ensure_cve_tables(conn):
     )
 
 
-async def _ensure_tags_table(conn):
-    async with conn.execute("PRAGMA table_info(tags_sha256)") as cursor:
-        columns_info = await cursor.fetchall()
+async def _init_year_pool(year: str, db_path: str, pool_size: int):
+    # Conexão de escrita só para garantir o schema no startup (idempotente);
+    # é fechada em seguida — a API só faz leitura a partir daqui.
+    admin_conn = await aiosqlite.connect(db_path)
+    try:
+        await admin_conn.execute("PRAGMA journal_mode = WAL;")
+        await admin_conn.execute("PRAGMA synchronous = NORMAL;")
+        await _ensure_cve_tables(admin_conn)
+        await admin_conn.commit()
+    finally:
+        await admin_conn.close()
 
-    table_exists = bool(columns_info)
-    columns = {row[1] for row in columns_info}
+    queue: asyncio.Queue = asyncio.Queue(maxsize=pool_size)
+    conns = []
+    for _ in range(pool_size):
+        conn = await _new_read_connection(db_path)
+        conns.append(conn)
+        await queue.put(conn)
 
-    if table_exists and "url" not in columns:
-        await conn.execute("ALTER TABLE tags_sha256 RENAME TO tags_sha256_old")
-
-    await conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tags_sha256 (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tag TEXT NOT NULL,
-            url TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(tag, url, sha256)
-        )
-        """
-    )
-
-    if table_exists and "url" not in columns:
-        await conn.execute(
-            """
-            INSERT INTO tags_sha256 (id, tag, url, sha256, created_at)
-            SELECT id, tag, '', sha256, created_at
-            FROM tags_sha256_old
-            """
-        )
-        await conn.execute("DROP TABLE tags_sha256_old")
-
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tags_sha256_tag ON tags_sha256(tag)"
-    )
+    _pools[year] = {"queue": queue, "conns": conns}
 
 
 async def init_db(pool_size: int = POOL_SIZE):
-    global _write_conn, _read_queue
+    """Descobre todos os bancos cve_{year}.db existentes e abre um pool de
+    leitura para cada um. Rodar o script de build antes de subir a API."""
+    db_files = sorted(glob.glob(db_path_for_year("*")))
+    if not db_files:
+        raise RuntimeError(
+            f"Nenhum banco encontrado em {DB_DIR!r} com o padrão "
+            f"{DB_NAME_TEMPLATE.format(year='*')!r}. Rode o script de build primeiro."
+        )
 
-    # Conexão única de escrita: cuida de todo o DDL/migração no startup
-    _write_conn = await aiosqlite.connect(DB_NAME)
-    await _write_conn.execute("PRAGMA journal_mode = WAL;")
-    await _write_conn.execute("PRAGMA synchronous = NORMAL;")
-
-    await _ensure_cve_tables(_write_conn)
-    await _ensure_tags_table(_write_conn)
-    await _write_conn.commit()
-
-    # Pool de conexões somente-leitura: permite buscas concorrentes de verdade
-    _read_queue = asyncio.Queue(maxsize=pool_size)
-    for _ in range(pool_size):
-        conn = await _new_read_connection()
-        _read_pool.append(conn)
-        await _read_queue.put(conn)
+    await asyncio.gather(
+        *(
+            _init_year_pool(year, db_path, pool_size)
+            for db_path in db_files
+            if (year := _extract_year_from_db_path(db_path)) is not None
+        )
+    )
 
 
 async def close_db():
-    global _write_conn, _read_queue
-    if _read_queue is not None:
-        while not _read_queue.empty():
-            conn = await _read_queue.get()
+    for pool in _pools.values():
+        while not pool["queue"].empty():
+            await pool["queue"].get()
+        for conn in pool["conns"]:
             await conn.close()
-        _read_pool.clear()
-        _read_queue = None
-    if _write_conn:
-        await _write_conn.close()
-        _write_conn = None
-
-
-async def get_write_db():
-    """Para operações de escrita (ex.: tags_sha256). Use com cuidado/lock
-    se houver escritas concorrentes vindas de handlers diferentes."""
-    if _write_conn is None:
-        raise RuntimeError("Banco de dados não foi inicializado.")
-    return _write_conn
+    _pools.clear()
 
 
 @asynccontextmanager
-async def read_conn():
-    if _read_queue is None:
-        raise RuntimeError("Banco de dados não foi inicializado.")
-    conn = await _read_queue.get()
+async def read_conn(year: str):
+    pool = _pools.get(year)
+    if pool is None:
+        raise ValueError(f"Nenhum banco disponível para o ano {year!r}.")
+    conn = await pool["queue"].get()
     try:
         yield conn
     finally:
-        await _read_queue.put(conn)
+        await pool["queue"].put(conn)
 
 
 def _escape_fts_phrase(term: str) -> str:
@@ -160,7 +155,11 @@ async def get_cve_by_id(cve_id: str, raw: bool = False):
     """raw=True devolve os bytes do JSON já armazenado, sem parse/reserialize.
     Ideal para retornar direto como corpo da resposta HTTP
     (ex.: Response(content=data, media_type="application/json"))."""
-    async with read_conn() as db:
+    year = extract_cve_year(cve_id)
+    if year is None or year not in _pools:
+        return None
+
+    async with read_conn(year) as db:
         async with db.execute(
             "SELECT data FROM recent_cve WHERE cve_id = ?", (cve_id,)
         ) as cursor:
@@ -170,34 +169,22 @@ async def get_cve_by_id(cve_id: str, raw: bool = False):
             return row[0] if raw else orjson.loads(row[0])
 
 
-async def get_recent_cve(limit: int = 100, offset: int = 0, raw: bool = False):
-    limit = max(1, min(limit, 500))  # evita respostas gigantes por engano
-    offset = max(0, offset)
-    async with read_conn() as db:
-        async with db.execute(
-            "SELECT data FROM recent_cve "
-            "ORDER BY last_modified DESC, cve_id ASC LIMIT ? OFFSET ?",
-            (limit, offset),
-        ) as cursor:
-            rows = await cursor.fetchall()
-
-    if raw:
-        # monta o array JSON por concatenação de bytes, sem tocar no
-        # conteúdo de cada "data" (que já é um JSON válido no banco)
-        if not rows:
-            return b"[]"
-        return b"[" + b",".join(row[0] for row in rows) + b"]"
-
-    return [orjson.loads(row[0]) for row in rows]
-
-
 async def get_cves_by_package_name(
-    package_name: str, limit: int = 100, offset: int = 0, raw: bool = False
+    package_name: str,
+    year: str,
+    limit: int = 100,
+    offset: int = 0,
+    raw: bool = False,
 ):
+    """"year" é obrigatório: a busca sempre acontece dentro do banco daquele
+    ano, evitando varrer bancos que não interessam à consulta."""
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
-    search_term = f'"{_escape_fts_phrase(package_name)}"*'
 
+    if year not in _pools:
+        return b"[]" if raw else []
+
+    search_term = f'"{_escape_fts_phrase(package_name)}"*'
     query = """
         SELECT c.cve_id, c.last_modified, c.data
         FROM recent_cve_fts fts
@@ -207,7 +194,7 @@ async def get_cves_by_package_name(
         LIMIT ? OFFSET ?
     """
 
-    async with read_conn() as db:
+    async with read_conn(year) as db:
         async with db.execute(query, (search_term, limit, offset)) as cursor:
             rows = await cursor.fetchall()
 
