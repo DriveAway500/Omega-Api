@@ -25,6 +25,8 @@ class ZeroDayArchiveManager:
 
         new_data = await asyncio.to_thread(read_json)
 
+        new_data.reverse()
+
         async with self.lock:
             self.cache = new_data
         print(
