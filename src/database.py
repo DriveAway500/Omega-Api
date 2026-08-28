@@ -16,6 +16,15 @@ CVE_ID_RE = re.compile(r"^CVE-(\d{4})-\d+$", re.IGNORECASE)
 # cve_2023.db -> "2023" / cve_misc.db -> "misc"
 DB_YEAR_RE = re.compile(r"cve_(\w+)\.db$")
 
+# Faixas de severidade usadas nas pesquisas (mesmos valores do SelectOption
+# do bot: "low", "medium", "high", "critical")
+SEVERITY_RANGES = {
+    "low": (0.1, 3.9),
+    "medium": (4.0, 6.9),
+    "high": (7.0, 8.9),
+    "critical": (9.0, 10.0),
+}
+
 READ_PRAGMAS = """
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -63,13 +72,19 @@ async def _ensure_cve_tables(conn):
         CREATE TABLE IF NOT EXISTS recent_cve (
             cve_id TEXT PRIMARY KEY,
             last_modified TEXT,
-            data TEXT
+            data TEXT,
+            cvss_score REAL
         )
         """
     )
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_recent_cve_last_modified "
         "ON recent_cve(last_modified DESC)"
+    )
+    # Mesmo índice do script de build: acelera o filtro por faixa de CVSS
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recent_cve_cvss_score "
+        "ON recent_cve(cvss_score)"
     )
     # Mesma definição do script de build: content-linked, sem duplicar o JSON
     await conn.execute(
@@ -175,27 +190,48 @@ async def get_cves_by_package_name(
     limit: int = 100,
     offset: int = 0,
     raw: bool = False,
+    severity: str | None = None,
 ):
     """"year" é obrigatório: a busca sempre acontece dentro do banco daquele
-    ano, evitando varrer bancos que não interessam à consulta."""
+    ano, evitando varrer bancos que não interessam à consulta.
+
+    "severity" é opcional e aceita os mesmos valores do SelectOption do bot:
+    "low", "medium", "high" ou "critical". Quando informado, filtra também
+    por cvss_score dentro da faixa correspondente, usando o índice
+    idx_recent_cve_cvss_score (sem custo extra de varredura)."""
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
 
     if year not in _pools:
         return b"[]" if raw else []
 
+    params: list = []
+    severity_clause = ""
+    if severity is not None:
+        if severity not in SEVERITY_RANGES:
+            raise ValueError(
+                f"Severidade inválida: {severity!r}. "
+                f"Use um de: {', '.join(SEVERITY_RANGES)}."
+            )
+        min_score, max_score = SEVERITY_RANGES[severity]
+        severity_clause = "AND c.cvss_score BETWEEN ? AND ?"
+        params.extend([min_score, max_score])
+
     search_term = f'"{_escape_fts_phrase(package_name)}"*'
-    query = """
+    query = f"""
         SELECT c.cve_id, c.last_modified, c.data
         FROM recent_cve_fts fts
         JOIN recent_cve c ON c.rowid = fts.rowid
         WHERE recent_cve_fts MATCH ?
+        {severity_clause}
         ORDER BY c.last_modified DESC, c.cve_id ASC
         LIMIT ? OFFSET ?
     """
 
+    query_params = [search_term, *params, limit, offset]
+
     async with read_conn(year) as db:
-        async with db.execute(query, (search_term, limit, offset)) as cursor:
+        async with db.execute(query, query_params) as cursor:
             rows = await cursor.fetchall()
 
     if raw:

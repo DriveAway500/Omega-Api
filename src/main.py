@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from enum import Enum
 from typing import Any
 
 import uvicorn
@@ -20,6 +21,15 @@ JSON_MEDIA_TYPE = "application/json"
 # Mesmo padrão usado no build/database.py, só pra validar o formato do "year"
 # recebido na query string antes de bater no banco.
 YEAR_PATTERN = r"^\d{4}$|^misc$"
+
+
+class Severity(str, Enum):
+    """Mesmos valores usados no SelectOption do bot Discord."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
 @asynccontextmanager
@@ -56,15 +66,25 @@ async def search_cves_by_package(
     year: str = Query(..., pattern=YEAR_PATTERN, description="Ano do CVE (ex.: 2023)."),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    severity: Severity | None = Query(
+        None,
+        description="Filtra por faixa de CVSS: low (0.1-3.9), medium (4.0-6.9), "
+        "high (7.0-8.9) ou critical (9.0-10.0).",
+    ),
 ):
     data = await get_cves_by_package_name(
-        package_name, year, limit=limit, offset=offset, raw=True
+        package_name,
+        year,
+        limit=limit,
+        offset=offset,
+        raw=True,
+        severity=severity.value if severity else None,
     )
     if data == b"[]":
-        raise HTTPException(
-            status_code=404,
-            detail=f"No CVEs found affecting package '{package_name}' in {year}.",
-        )
+        detail = f"No CVEs found affecting package '{package_name}' in {year}"
+        if severity:
+            detail += f" with severity '{severity.value}'"
+        raise HTTPException(status_code=404, detail=detail + ".")
     return Response(content=data, media_type=JSON_MEDIA_TYPE)
 
 @app.get("/cve/{cve_id}")
