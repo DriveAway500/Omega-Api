@@ -11,6 +11,17 @@ DB_DIR = "."
 DB_NAME_TEMPLATE = "cve_{year}.db"  # mesmo padrão usado no script de build
 POOL_SIZE = 4  # conexões de leitura por ano / ajuste conforme núcleos e carga
 
+# >>> EDITE AQUI <<<
+# Anos que devem ser carregados 100% em RAM ao iniciar. Basta listar os anos
+# como string, ex.: ["2024", "2025"]. Os demais anos continuam servidos
+# normalmente a partir do arquivo em disco (com cache de página).
+MEMORY_YEARS: "set[str]" = {
+    "2026",
+    "2025"
+    # "2024",
+    # "2025",
+}
+
 # CVE-2023-12345 -> "2023"
 CVE_ID_RE = re.compile(r"^CVE-(\d{4})-\d+$", re.IGNORECASE)
 # cve_2023.db -> "2023" / cve_misc.db -> "misc"
@@ -25,6 +36,8 @@ SEVERITY_RANGES = {
     "critical": (9.0, 10.0),
 }
 
+# Pragmas para conexões de leitura em DISCO. cache_size/mmap_size existem pra
+# compensar I/O de disco — fazem sentido aqui porque o banco mora num arquivo.
 READ_PRAGMAS = """
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -34,12 +47,28 @@ READ_PRAGMAS = """
     PRAGMA mmap_size = 268435456;  -- 256MB
 """
 
-# Um pool de leitura por ano: {"2023": {"queue": Queue, "conns": [...]}, ...}
+# Pragmas para conexões de bancos que já vivem inteiramente em RAM
+# (:memory: com cache=shared). Não faz sentido configurar cache_size/mmap_size
+# (não existe página de disco pra cachear) nem journal_mode/synchronous
+# (bancos :memory: não têm journal em disco) — por isso ficam de fora.
+MEMORY_PRAGMAS = """
+    PRAGMA query_only = ON;
+    PRAGMA temp_store = MEMORY;
+"""
+
+# Um pool de leitura por ano: {"2023": {"queue": Queue, "conns": [...], "in_memory": bool}, ...}
 _pools: "dict[str, dict]" = {}
 
 
 def db_path_for_year(year: str) -> str:
     return os.path.join(DB_DIR, DB_NAME_TEMPLATE.format(year=year))
+
+
+def _memory_uri_for_year(year: str) -> str:
+    """URI de um banco :memory: nomeado com cache compartilhado. Enquanto
+    houver ao menos uma conexão aberta pra essa URI, o conteúdo persiste em
+    RAM e pode ser acessado por múltiplas conexões concorrentes."""
+    return f"file:cve_{year}_ram?mode=memory&cache=shared"
 
 
 def extract_cve_year(cve_id: str) -> str | None:
@@ -99,9 +128,42 @@ async def _ensure_cve_tables(conn):
     )
 
 
-async def _init_year_pool(year: str, db_path: str, pool_size: int):
+async def _build_disk_pool(db_path: str, pool_size: int) -> list:
+    return [await _new_read_connection(db_path) for _ in range(pool_size)]
+
+
+async def _build_memory_pool(year: str, db_path: str, pool_size: int) -> list:
+    """Copia o banco inteiro (schema + dados + índices + FTS) do disco pra um
+    banco :memory: com cache compartilhado, e abre `pool_size` conexões de
+    leitura apontando pra esse mesmo banco em RAM."""
+    mem_uri = _memory_uri_for_year(year)
+
+    # Conexão "âncora": enquanto ela ficar aberta, o banco em memória
+    # permanece vivo. Também é o destino do backup abaixo.
+    anchor = await aiosqlite.connect(mem_uri, uri=True)
+
+    src = await aiosqlite.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        await src.backup(anchor)
+    finally:
+        await src.close()
+
+    conns = [anchor]
+    for _ in range(pool_size - 1):
+        conns.append(await aiosqlite.connect(mem_uri, uri=True))
+
+    for conn in conns:
+        await conn.executescript(MEMORY_PRAGMAS)
+        conn.text_factory = bytes
+
+    return conns
+
+
+async def _init_year_pool(year: str, db_path: str, pool_size: int, in_memory: bool):
     # Conexão de escrita só para garantir o schema no startup (idempotente);
-    # é fechada em seguida — a API só faz leitura a partir daqui.
+    # é fechada em seguida — a API só faz leitura a partir daqui. Isso roda
+    # sempre no arquivo em disco, mesmo quando o ano vai pra RAM depois,
+    # porque é a fonte que será copiada pelo backup.
     admin_conn = await aiosqlite.connect(db_path)
     try:
         await admin_conn.execute("PRAGMA journal_mode = WAL;")
@@ -111,19 +173,26 @@ async def _init_year_pool(year: str, db_path: str, pool_size: int):
     finally:
         await admin_conn.close()
 
+    if in_memory:
+        conns = await _build_memory_pool(year, db_path, pool_size)
+    else:
+        conns = await _build_disk_pool(db_path, pool_size)
+
     queue: asyncio.Queue = asyncio.Queue(maxsize=pool_size)
-    conns = []
-    for _ in range(pool_size):
-        conn = await _new_read_connection(db_path)
-        conns.append(conn)
+    for conn in conns:
         await queue.put(conn)
 
-    _pools[year] = {"queue": queue, "conns": conns}
+    _pools[year] = {"queue": queue, "conns": conns, "in_memory": in_memory}
 
 
 async def init_db(pool_size: int = POOL_SIZE):
     """Descobre todos os bancos cve_{year}.db existentes e abre um pool de
-    leitura para cada um. Rodar o script de build antes de subir a API."""
+    leitura para cada um. Rodar o script de build antes de subir a API.
+
+    Os anos listados em MEMORY_YEARS (topo do arquivo) são carregados
+    inteiramente em RAM; os demais são servidos normalmente a partir do
+    arquivo em disco.
+    """
     db_files = sorted(glob.glob(db_path_for_year("*")))
     if not db_files:
         raise RuntimeError(
@@ -133,7 +202,9 @@ async def init_db(pool_size: int = POOL_SIZE):
 
     await asyncio.gather(
         *(
-            _init_year_pool(year, db_path, pool_size)
+            _init_year_pool(
+                year, db_path, pool_size, in_memory=year in MEMORY_YEARS
+            )
             for db_path in db_files
             if (year := _extract_year_from_db_path(db_path)) is not None
         )
@@ -147,6 +218,12 @@ async def close_db():
         for conn in pool["conns"]:
             await conn.close()
     _pools.clear()
+
+
+def is_in_memory(year: str) -> bool:
+    """Útil pra debug/monitoramento: diz se o ano está servindo a partir de RAM."""
+    pool = _pools.get(year)
+    return bool(pool and pool["in_memory"])
 
 
 @asynccontextmanager
