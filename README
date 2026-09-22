@@ -1,0 +1,14 @@
+clone o repositorio de exploits com:
+git clone --depth 1 https://gitlab.com/exploit-database/exploitdb.git
+
+atualize com: git pull
+
+uso da rota de exploits:
+"http://127.0.0.1:3000/exploit/search?q=wordpress&limit=10"
+"http://127.0.0.1:3000/exploit/51438"
+
+As rotas de listagem e busca aceitam paginacao por deslocamento com `limit` e
+`offset`. Por exemplo, `GET /exploit/search?q=wordpress&limit=10&offset=10`
+retorna a segunda pagina de resultados. O mesmo vale para `/cve`,
+`/cve/search/package` e `/zeroday/search`.
+curl "http://localhost:3000/cve/search/package?package_name=log4j&year=2021&severity=critical"
