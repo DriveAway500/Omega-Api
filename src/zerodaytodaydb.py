@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 
-REPO_DIR = os.path.abspath("0day.today.archive")
+REPO_DIR = os.path.abspath("../0day.today.archive")
 
 
 class ZeroDayArchiveManager:
