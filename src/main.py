@@ -18,14 +18,10 @@ from database import (
 )
 
 JSON_MEDIA_TYPE = "application/json"
-# Mesmo padrão usado no build/database.py, só pra validar o formato do "year"
-# recebido na query string antes de bater no banco.
 YEAR_PATTERN = r"^\d{4}$|^misc$"
 
 
 class Severity(str, Enum):
-    """Mesmos valores usados no SelectOption do bot Discord."""
-
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -50,8 +46,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Comprime respostas acima de ~1KB (a listagem de CVEs facilmente passa disso).
-# O ganho aqui é de rede/latência percebida pelo cliente, não de CPU do servidor.
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -63,12 +57,12 @@ async def health_check():
 @app.get("/cve/search/package")
 async def search_cves_by_package(
     package_name: str = Query(..., min_length=1),
-    year: str = Query(..., pattern=YEAR_PATTERN, description="Ano do CVE (ex.: 2023)."),
+    year: str = Query(..., pattern=YEAR_PATTERN, description="CVE (ex.: 2023)."),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     severity: Severity | None = Query(
         None,
-        description="Filtra por faixa de CVSS: low (0.1-3.9), medium (4.0-6.9), "
+        description="low (0.1-3.9), medium (4.0-6.9), "
         "high (7.0-8.9) ou critical (9.0-10.0).",
     ),
 ):
@@ -132,7 +126,4 @@ async def get_zeroday_exploit_by_id(exploit_id: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Em produção: remova reload=True, ajuste host para "0.0.0.0" e considere
-    # workers>1 (uvicorn --workers N) já que cada worker abre seu próprio pool
-    # de conexões de leitura (init_db roda por processo).
     uvicorn.run("main:app", host="127.0.0.1", port=3000, reload=True)
