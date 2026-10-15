@@ -6,9 +6,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 import asyncio
+import re
 
 from httpx_client import client #if you don't have a client use this one (very simple, still)
 from json_handler import JSONHandler
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 #some of the data stored here is not being used for now, but will be used later in better versions of this script
 @dataclass(frozen=True)
@@ -109,12 +112,22 @@ class FetchNvd(DataControl):
             [asdict(m) for m in self.meta_link_list],
         )
 
-
-
     @staticmethod
-    def _check_sha256(current_hash: str, new_hash: str) -> bool :
-        """compare two hashes, true if different"""
-        return current_hash != new_hash
+    def _normalize_sha256(value: str) -> str:
+        """Normalize and validate an SHA-256 hash (64 hexadecimal characters)."""
+        if not isinstance(value, str):
+            raise TypeError(f"Hash must be str, got: {type(value).__name__}")
+
+        normalized = value.strip().lower()
+
+        if not _SHA256_RE.fullmatch(normalized):
+            raise ValueError(f"Invalid SHA-256 hash: {value!r}")
+
+        return normalized
+
+    def _check_sha256(self, current_hash: str, new_hash: str) -> bool:
+        """Compare two SHA-256 hashes. Returns True if they are different."""
+        return self._normalize_sha256(current_hash) != self._normalize_sha256(new_hash)
 
     @staticmethod
     def _check_lastrun(lastrun:str) -> bool:
