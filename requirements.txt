@@ -7,3 +7,4 @@ pytest-asyncio
 httpx
 orjson
 starlette
+pydantic
