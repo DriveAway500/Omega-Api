@@ -53,7 +53,7 @@ class DataControl:
 
 class FetchNvd(DataControl):
     def __init__(self):
-        super().__init__("../../data")
+        super().__init__("../../nvd_data")
         self.meta_link_list:  list[MetaLink] = []
         self.last_fetch_list: list[str]      = []
 
