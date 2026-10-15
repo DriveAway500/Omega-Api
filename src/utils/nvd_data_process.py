@@ -10,7 +10,7 @@ import time
 # ----------------------------------------------------------------------
 # CONFIGURAÇÃO DE PASTAS
 # ----------------------------------------------------------------------
-INPUT_DIR = "../../data"       # pasta de onde os arquivos .json.gz serão lidos
+INPUT_DIR = "../../nvd_data"       # pasta de onde os arquivos .json.gz serão lidos
 OUTPUT_DIR = "../../database"      # pasta onde os .db por ano serão criados
 
 FILE_PATTERN = "nvdcve-2.0-*.json.gz"
