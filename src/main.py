@@ -11,6 +11,8 @@ from starlette.middleware.gzip import GZipMiddleware
 from exploitdb import exploit_db
 from zerodaytodaydb import zeroday_mgr
 
+import kev_catalog
+
 from database import (
     close_db,
     get_cve_by_id,
@@ -73,6 +75,15 @@ class ExploitIdRequest(BaseRequest):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class KevSearchRequest(PaginationRequest):
+    q: str = Field(..., min_length=1, description="Search term.")
+    fields: list[str] | None = Field(
+        None,
+        description="Subset of fields to search; defaults to all searchable fields "
+        f"({', '.join(kev_catalog.SEARCHABLE_FIELDS)}).",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -167,6 +178,71 @@ async def get_zeroday_exploit_by_id(payload: ExploitIdRequest) -> dict[str, Any]
     if error:
         raise HTTPException(status_code=404, detail=error)
     return data
+
+
+# --------------------------------- KEV ---------------------------------------- #
+# Read-only: the index itself is produced out-of-band by build_kev_index.py
+# (a separate, standalone script run via cron/systemd/etc). These routes only
+# ever read what that script already wrote to disk.
+_NO_PREVIOUS_INDEX_DETAIL = (
+    "No previous index yet — build_kev_index.py needs to have run at least twice."
+)
+
+
+@app.get("/kev/diff")
+async def get_kev_diff() -> dict[str, Any]:
+    """Full diff (added / removed / modified) between the current index
+    and the one from the previous builder run."""
+    diff = kev_catalog.diff_against_previous()
+    if diff["old_generated_at"] is None:
+        raise HTTPException(status_code=404, detail=_NO_PREVIOUS_INDEX_DETAIL)
+    return diff
+
+
+@app.get("/kev/new")
+async def get_kev_new() -> dict[str, Any]:
+    """CVEs present in the current index but not in the previous one."""
+    diff = kev_catalog.diff_against_previous()
+    if diff["old_generated_at"] is None:
+        raise HTTPException(status_code=404, detail=_NO_PREVIOUS_INDEX_DETAIL)
+    return {"count": diff["added_count"], "entries": diff["added"]}
+
+
+@app.get("/kev/removed")
+async def get_kev_removed() -> dict[str, Any]:
+    """CVEs present in the previous index but no longer in the current one."""
+    diff = kev_catalog.diff_against_previous()
+    if diff["old_generated_at"] is None:
+        raise HTTPException(status_code=404, detail=_NO_PREVIOUS_INDEX_DETAIL)
+    return {"count": diff["removed_count"], "entries": diff["removed"]}
+
+
+@app.post("/kev/search")
+async def search_kev(payload: KevSearchRequest) -> dict[str, Any]:
+    """Free-text search across the indexed KEV rows."""
+    index = kev_catalog.load_index()
+    if index["count"] == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Index not built yet — build_kev_index.py needs to run first.",
+        )
+    return kev_catalog.search(
+        index,
+        payload.q,
+        fields=payload.fields,
+        limit=payload.limit,
+        offset=payload.offset,
+    )
+
+
+@app.get("/kev/get/{cve_id}")
+async def get_kev_entry(cve_id: str) -> dict[str, Any]:
+    """Direct lookup of a single CVE from the index by id."""
+    index = kev_catalog.load_index()
+    entry = kev_catalog.get_by_id(index, cve_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Not found in KEV index.")
+    return entry
 
 
 if __name__ == "__main__":
