@@ -1,7 +1,7 @@
 [
     {
         "cisa_csv_link": "https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv",
-        "cisa_last_fetch": "2026-10-15T18:50:01.023581-04:00",
-        "cisa_csv_etag": "\"102e30-65de3fbb9c880\""
+        "cisa_last_fetch": "2026-10-16T03:00:55.780605-04:00",
+        "cisa_csv_sha256": "4e256f32a339d5c70c81fdca37b2bff20e6b71ae89d2a71db3cff135754ea071"
     }
 ]
