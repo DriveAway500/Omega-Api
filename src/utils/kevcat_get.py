@@ -8,7 +8,7 @@ from httpx_client import client
 from json_handler import JSONHandler
 
 @dataclass
-class CISAData:
+class KevData:
     """
     Metadata for the last CISA CSV download.
 
@@ -28,7 +28,7 @@ class CISAData:
     path:   Path     = field(default=Path("."), repr=False)
 
     @classmethod
-    def load(cls, path: str | Path) -> "CISAData":
+    def load(cls, path: str | Path) -> "KevData":
         """
         Load metadata from `<path>/cisa_data.json`.
 
@@ -39,20 +39,20 @@ class CISAData:
             path: Directory containing `cisa_data.json`.
 
         Returns:
-            A `CISAData` instance with `path` pointing to the file read.
+            A `KevData` instance with `path` pointing to the file read.
 
         Raises:
             KeyError: If an expected key is missing from the JSON.
             ValueError: If `cisa_last_fetch` is not valid ISO 8601.
             IndexError: If the JSON contains no records.
         """
-        file  = Path(path) / "cisa_data.json"
+        file  = Path(path) / "kev_data.json"
         data  = JSONHandler.load(file)[0]
-        fetch = datetime.fromisoformat(data["cisa_last_fetch"])
+        fetch = datetime.fromisoformat(data["kev_last_fetch"])
 
         return cls(
-            link   = data["cisa_csv_link"],
-            sha256   = data["cisa_csv_sha256"],
+            link   = data["kev_csv_link"],
+            sha256   = data["kev_csv_sha256"],
             fetch  = fetch,
             path   = file
         )
@@ -64,17 +64,17 @@ class CISAData:
         The file is overwritten with a list containing a single record.
         """
         record = {
-            "cisa_csv_link":   self.link,
-            "cisa_last_fetch": self.fetch.isoformat(),
-            "cisa_csv_sha256": self.sha256
+            "kev_csv_link":   self.link,
+            "kev_last_fetch": self.fetch.isoformat(),
+            "kev_csv_sha256": self.sha256
         }
         JSONHandler.save(self.path, [record])
 
 
-class FetchCisaJson:
+class FetchKevCSV:
     """Downloads the CISA CSV and stores it only when its content changes."""
     def __init__(self):
-        self.data = CISAData.load("../../cisa_data")
+        self.data = KevData.load("../../kev_data")
 
     def _check_lastrun(self) -> bool:
         """
@@ -86,7 +86,7 @@ class FetchCisaJson:
         now = datetime.now(self.data.fetch.tzinfo)
         return (now - self.data.fetch) > timedelta(minutes=60)
 
-    async def _fetch_cisa_csv(self) -> None:
+    async def _fetch_kev_csv(self) -> None:
         """
         Download the CISA CSV in chunks and save it if its content changed.
 
@@ -114,7 +114,7 @@ class FetchCisaJson:
             return
 
         tz = self.data.fetch.tzinfo
-        tmp = dest_dir / "cisa_csv.tmp"
+        tmp = dest_dir / "kev_csv.tmp"
         hasher = hashlib.sha256()
 
         async with client.stream("GET", self.data.link) as response:
@@ -136,7 +136,7 @@ class FetchCisaJson:
         if sha256 == self.data.sha256:
             tmp.unlink(missing_ok=True)
         else:
-            dest = dest_dir / f"{now.strftime('%Y%m%dT%H%M%S')}_{sha256}.csv"
+            dest = dest_dir / f"{now.strftime('%Y%m%dT%H%M%S')}.csv"
             tmp.replace(dest)
             self.data.sha256 = sha256
 
@@ -144,13 +144,13 @@ class FetchCisaJson:
         self.data.save()
 
     async def run(self):
-        await self._fetch_cisa_csv()
+        await self._fetch_kev_csv()
 
 
 def main():
-    cisa_fetch = FetchCisaJson()
+    kev_fetch = FetchKevCSV()
     try:
-        asyncio.run(cisa_fetch.run())
+        asyncio.run(kev_fetch.run())
     except KeyboardInterrupt:
         pass
 
