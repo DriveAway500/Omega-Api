@@ -40,7 +40,7 @@ source "${VENV_PATH}/bin/activate"
 cd "$SRC_UTILS" || exit 1
 
 log "Running kevcat_fetch.py..."
-python3 kevcat_fetch.py
+python3 kevcat_get.py
 
 log "Running kevcat_process.py..."
 python3 kevcat_process.py
